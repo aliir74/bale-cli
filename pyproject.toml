@@ -1,0 +1,20 @@
+[project]
+name = "bale-user-cli"
+version = "0.1.0"
+description = "Thin CLI over aiobale for Ali's own Bale user account"
+requires-python = ">=3.10"
+dependencies = [
+    "aiobale-py @ git+https://github.com/aminmadaniofficial/aiobale@036d87f0c96bd1fa312e041d050446567aa7c702",
+    "click>=8.1",
+    "pillow>=10",
+]
+
+[project.scripts]
+bale = "bale_user_cli.main:cli"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["bale_user_cli"]
