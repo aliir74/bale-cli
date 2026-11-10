@@ -26,8 +26,27 @@ def _ensure_home() -> None:
     HOME.mkdir(mode=0o700, exist_ok=True)
 
 
+def _patch_http_timeout() -> None:
+    """aiobale's shared HTTP session gets aiohttp's default 5-minute total timeout,
+    which kills uploads of large files (videos over ~40 MB). Drop the total cap."""
+    import aiohttp
+    from aiobale.client.session.aiohttp import AiohttpSession
+
+    if getattr(AiohttpSession, "_bale_cli_patched", False):
+        return
+    orig = AiohttpSession._create_client_session
+
+    def patched(self, timeout=None):
+        return orig(self, timeout or aiohttp.ClientTimeout(total=None, sock_connect=60, sock_read=900))
+
+    AiohttpSession._create_client_session = patched
+    AiohttpSession._bale_cli_patched = True
+
+
 def _client(require_auth: bool = True):
     from aiobale import Client
+
+    _patch_http_timeout()
 
     _ensure_home()
     if require_auth and not SESSION.exists():
@@ -453,6 +472,36 @@ def _thumb_and_size(path: pathlib.Path):
         return None, 1000, 1000, None
 
 
+def _video_meta(path: pathlib.Path):
+    """Return (thumb_bytes|None, w, h, duration_ms|None) for a video via ffprobe/ffmpeg."""
+    import json as _json, shutil, subprocess, tempfile
+    w, h, dur = 1000, 1000, None
+    if shutil.which("ffprobe"):
+        try:
+            r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                                "-show_entries", "stream=width,height:stream_side_data=rotation:format=duration",
+                                "-of", "json", str(path)], capture_output=True, text=True, check=True)
+            d = _json.loads(r.stdout)
+            st = (d.get("streams") or [{}])[0]
+            w, h = st.get("width", w), st.get("height", h)
+            rot = next((abs(int(sd.get("rotation", 0))) for sd in st.get("side_data_list", []) if "rotation" in sd), 0)
+            if rot in (90, 270):
+                w, h = h, w
+            if d.get("format", {}).get("duration"):
+                dur = int(float(d["format"]["duration"]) * 1000)
+        except Exception:
+            pass
+    thumb = None
+    if shutil.which("ffmpeg"):
+        with tempfile.TemporaryDirectory() as td:
+            frame = pathlib.Path(td) / "f.jpg"
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "1", "-i", str(path),
+                            "-frames:v", "1", str(frame)], capture_output=True)
+            if frame.exists():
+                thumb = _thumb_and_size(frame)[0]
+    return thumb, w, h, dur
+
+
 def _media_cmd(kind: str):
     @click.option("--to", "target", required=True, help="me | g:<id> | u:<id> | <id>")
     @click.option("--caption", default=None)
@@ -468,6 +517,11 @@ def _media_cmd(kind: str):
                 f = FileInput(str(path))
                 if kind == "file":
                     msg = await c.send_document(f, cid, ctype, caption=caption)
+                elif kind == "video":
+                    thumb, w, h, dur = _video_meta(path)
+                    msg = await c.send_video(f, cid, ctype, caption=caption, cover_width=w,
+                                             cover_height=h, duration=dur,
+                                             cover_thumb=FileInput(thumb) if thumb else None)
                 else:
                     thumb, w, h, dur = _thumb_and_size(path)
                     kw = dict(caption=caption, cover_width=w, cover_height=h,
@@ -481,13 +535,15 @@ def _media_cmd(kind: str):
             _sent(msg, as_json)
         _run(go())
     cmd.__doc__ = {"photo": "Send an image.", "gif": "Send a GIF/animation (plays inline).",
-                   "file": "Send any file as a document."}[kind]
+                   "file": "Send any file as a document.",
+                   "video": "Send a video (plays inline, with thumbnail and duration)."}[kind]
     return cmd
 
 
 send.command("photo")(_media_cmd("photo"))
 send.command("gif")(_media_cmd("gif"))
 send.command("file")(_media_cmd("file"))
+send.command("video")(_media_cmd("video"))
 
 
 if __name__ == "__main__":
