@@ -251,7 +251,7 @@ def _fmt_dialog(r):
 # ---------- CLI ----------
 
 @click.group()
-@click.version_option("0.1.0", prog_name="bale")
+@click.version_option("0.2.0", prog_name="bale")
 def cli():
     """Bale messenger CLI acting as your own user account (via aiobale)."""
 
