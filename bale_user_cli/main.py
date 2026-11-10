@@ -391,6 +391,21 @@ def chats_search(query, limit, as_json):
     _run(go())
 
 
+@chats.command("read")
+@click.option("--chat", "target", required=True, help="me | g:<id> | u:<id> | <id>")
+def chats_read(target):
+    """Mark a chat as read (seen)."""
+    async def go():
+        c = _client()
+        try:
+            cid, ctype = await _resolve(c, target)
+            await c.seen_chat(cid, ctype)
+        finally:
+            await c.session.close()
+        click.echo(f"Marked {target} as read.")
+    _run(go())
+
+
 @cli.group()
 def messages():
     """Read message history."""
